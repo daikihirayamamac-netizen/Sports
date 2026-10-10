@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict';
+import {spawn,type ChildProcess} from 'node:child_process';
+import {randomBytes,randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {chromium,type Browser} from 'playwright-core';
+import sharp from 'sharp';
+
+async function main(){
+  const base='http://127.0.0.1:3100';
+  const temp=await mkdtemp(path.join(tmpdir(),'sports-e2e-'));
+  const password=randomBytes(18).toString('base64url');
+  const evidence=path.join(process.cwd(),'test-results');await mkdir(evidence,{recursive:true});
+  let server:ChildProcess|undefined;let browser:Browser|undefined;let logs='';
+  const startServer=async()=>{
+    server=spawn('node',['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port','3100'],{
+      env:{...process.env,LOCAL_DEMO:'1',LOCAL_DATA_DIR:temp,ADMIN_PASSWORD:password,SESSION_SECRET:randomBytes(48).toString('hex'),NEXT_TELEMETRY_DISABLED:'1'},stdio:['ignore','pipe','pipe']
+    });
+    server.stdout?.on('data',d=>logs+=d.toString());server.stderr?.on('data',d=>logs+=d.toString());
+    for(let i=0;i<80;i++){try{if((await fetch(`${base}/api/board`)).ok)return;}catch{}await new Promise(r=>setTimeout(r,250));}
+    throw new Error('Local server did not start');
+  };
+  const stopServer=async()=>{if(!server||server.exitCode!==null)return;const child=server;await new Promise<void>(resolve=>{child.once('exit',()=>resolve());child.kill('SIGTERM');});};
+  const passed:string[]=[];
+  const pass=(label:string)=>{passed.push(label);console.log(`PASS ${label}`);};
+  try{
+    await startServer();
+    browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+    const operator=await browser.newContext({viewport:{width:1440,height:1080},locale:'ja-JP'});
+    const spectator=await browser.newContext({viewport:{width:1440,height:1080},locale:'ja-JP'});
+    const page=await operator.newPage();const viewer=await spectator.newPage();
+    const errors:string[]=[];
+    for(const p of [page,viewer])p.on('pageerror',e=>errors.push(e.message));
+    await viewer.goto(base);await viewer.getByText('自動更新中 · 3秒ごと').waitFor();
+    await viewer.screenshot({path:path.join(evidence,'desktop.png'),fullPage:true});
+    assert.equal(await viewer.getByRole('button',{name:'試合開始',exact:true}).count(),0);
+    const unauthorized=await spectator.request.post(`${base}/api/board`,{headers:{origin:base},data:{id:randomUUID(),matchId:'match-1300',version:0,action:{type:'start'}}});
+    assert.equal(unauthorized.status(),401);pass('spectators can read but cannot change the match');
+    await page.goto(`${base}/admin`);
+    await page.getByLabel('操作用パスワード').fill('incorrect-password');
+    await page.getByRole('button',{name:'操作画面に入る'}).click();await page.getByText('パスワードが違います。').waitFor();
+    await page.getByLabel('操作用パスワード').fill(password);await page.getByRole('button',{name:'操作画面に入る'}).click();
+    await page.getByRole('button',{name:'試合開始',exact:true}).waitFor();pass('admin authentication rejects wrong passwords and accepts correct credentials');
+    await page.getByRole('button',{name:'試合設定',exact:true}).click();
+    await page.getByLabel('ホーム',{exact:true}).fill('ホームチーム');
+    await page.getByLabel('片方のハーフ時間（分）').fill('30');
+    await page.getByRole('button',{name:'設定を保存',exact:true}).click();
+    await page.locator('dialog').waitFor({state:'detached'});
+    await page.getByRole('button',{name:'試合開始',exact:true}).click();
+    await page.getByRole('button',{name:'時計を停止',exact:true}).waitFor();
+    await page.locator('.goal-control.home button').click();
+    await viewer.waitForFunction(()=>document.querySelector('.score>span')?.textContent==='1');
+    pass('a goal reaches a separate spectator browser automatically');
+    const board=async()=>await (await operator.request.get(`${base}/api/board`)).json();
+    const post=async(action:unknown,version:number,id=randomUUID())=>operator.request.post(`${base}/api/board`,{headers:{origin:base},data:{id,matchId:'match-1300',version,action}});
+    const initial=await board();const id=randomUUID();
+    const first=await post({type:'goal',side:'away'},initial.board.version,id);assert.equal(first.status(),200);
+    const duplicate=await post({type:'goal',side:'away'},initial.board.version,id);assert.equal(duplicate.status(),200);
+    const after=await board();assert.equal(after.board.matches[0].events.filter((e:{kind:string,side:string})=>e.kind==='goal'&&e.side==='away').length,1);
+    pass('retrying a saved command does not award an extra goal');
+    const conflictVersion=after.board.version;
+    const races=await Promise.all([post({type:'note',text:'速報 A'},conflictVersion),post({type:'note',text:'速報 B'},conflictVersion)]);
+    assert.deepEqual(races.map(r=>r.status()).sort(),[200,409]);pass('simultaneous edits detect a version conflict without lost writes');
+    const forgery=await operator.request.post(`${base}/api/board`,{headers:{origin:'https://untrusted.example'},data:{id:randomUUID(),matchId:'match-1300',version:0,action:{type:'start'}}});
+    assert.equal(forgery.status(),403);pass('cross-origin writes are rejected');
+    await page.reload();await page.getByRole('button',{name:'カード',exact:true}).waitFor();
+    await page.getByRole('button',{name:'カード',exact:true}).click();await page.getByLabel('背番号・選手名').fill('10');
+    await page.getByRole('button',{name:'カードを記録',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});
+    await viewer.getByText('イエローカード',{exact:true}).waitFor();
+    assert.equal((await board()).board.matches[0].events.filter((e:{kind:string})=>e.kind==='yellow').length,1);
+    pass('yellow card and player number are synchronized');
+    await page.getByRole('button',{name:'直前の記録を取り消す',exact:true}).click();await page.getByRole('button',{name:'確定する',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});
+    await viewer.getByText('取り消し済み',{exact:true}).waitFor();pass('undo is reflected in the spectator timeline');
+    const photo=await sharp({create:{width:900,height:600,channels:3,background:'#74a567'}}).jpeg().toBuffer();
+    await page.getByRole('button',{name:'写真',exact:true}).click();
+    await page.getByLabel('写真ファイル').setInputFiles({name:'test-photo.jpg',mimeType:'image/jpeg',buffer:photo});
+    await page.getByRole('button',{name:'写真を公開する',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});
+    await viewer.getByRole('tab',{name:/写真/}).click();await viewer.locator('.photo-grid img').waitFor();
+    assert.equal(await viewer.locator('.photo-grid img').evaluate((image:HTMLImageElement)=>image.complete&&image.naturalWidth>0),true);
+    pass('a photo uploads, persists and renders in another browser');
+    const persisted=await board();const imageUrl=persisted.board.matches[0].events.find((e:{kind:string})=>e.kind==='photo').photoUrl;
+    const imageResponse=await fetch(`${base}${imageUrl}`);assert.equal(imageResponse.headers.get('content-type'),'image/jpeg');
+    await page.getByRole('button',{name:'時計補正',exact:true}).click();
+    await page.getByLabel('分',{exact:true}).fill('31');await page.getByLabel('秒',{exact:true}).fill('5');
+    await page.getByRole('button',{name:'時計を合わせる',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});
+    await page.getByRole('button',{name:'前半終了',exact:true}).click();await page.getByRole('button',{name:'確定する',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});
+    let state=(await board()).board.matches[0];assert.equal(state.phase,'halftime');assert.equal(state.runningSince,null);
+    await page.getByRole('button',{name:'後半開始（30:00〜）',exact:true}).click();
+    state=(await board()).board.matches[0];assert.equal(state.phase,'second');assert.equal(state.elapsedMs,1_800_000);
+    pass('clock correction, halftime and the configured second-half start work');
+    await page.screenshot({path:path.join(evidence,'admin.png'),fullPage:true});
+    const mobile=await browser.newContext({viewport:{width:390,height:844},isMobile:true,deviceScaleFactor:1,locale:'ja-JP'});
+    const phone=await mobile.newPage();phone.on('pageerror',e=>errors.push(e.message));await phone.goto(base);await phone.getByText('自動更新中 · 3秒ごと').waitFor();
+    assert.ok(await phone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    await phone.screenshot({path:path.join(evidence,'mobile.png'),fullPage:true});
+    await phone.setViewportSize({width:320,height:720});assert.ok(await phone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    pass('mobile layouts fit both 390px and 320px without horizontal overflow');
+    await phone.getByRole('button',{name:'QRコードを表示',exact:true}).click();await phone.getByAltText('観戦用URLのQRコード').waitFor();
+    const url=await phone.getByRole('textbox',{name:'観戦用URL'}).inputValue();assert.equal(url,`${base}/?match=match-1300`);assert.ok(!url.includes('admin'));
+    pass('QR sharing points only to the public spectator page');
+    await phone.getByRole('button',{name:'閉じる',exact:true}).click();
+    await phone.getByRole('button',{name:/14:20/}).click();
+    await phone.getByRole('heading',{name:'見前南中',exact:true}).waitFor();
+    assert.equal((await board()).board.matches[1].events.length,0);pass('switching fixtures keeps score and event history separate');
+    await spectator.setOffline(true);await viewer.reload().catch(()=>{});await spectator.setOffline(false);await viewer.goto(base);await viewer.getByText('自動更新中 · 3秒ごと').waitFor();
+    pass('the spectator recovers after the connection returns');
+    const beforeRestart=await board();await stopServer();await startServer();
+    const afterRestart=await (await fetch(`${base}/api/board`)).json();assert.deepEqual(afterRestart.board,beforeRestart.board);
+    assert.equal((await fetch(`${base}${imageUrl}`)).status,200);pass('scores, running clock and photo survive a local server restart');
+    assert.deepEqual(errors,[]);pass('no uncaught browser errors');
+    await writeFile(path.join(evidence,'report.json'),JSON.stringify({mode:'isolated-local-persistence',passed,productionDeployed:false,browserErrors:errors},null,2));
+  }catch(e){await writeFile(path.join(evidence,'server.log'),logs);throw e;}
+  finally{await browser?.close();await stopServer();await rm(temp,{recursive:true,force:true});}
+}
+main().catch(error=>{console.error(error);process.exitCode=1;});
