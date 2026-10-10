@@ -307,3 +307,61 @@ body {
   .dialog { background: #fbfdf7; }
   .dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* A continuous lens tracks a captured pointer, then settles into its destination. */
+@media (max-width: 760px) {
+  .mobile-match-nav.liquid-dock {
+    isolation: isolate;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    background: linear-gradient(145deg, #ffffff9e, #eef5e779 48%, #ffffffaa);
+    border-color: #ffffffe0;
+    -webkit-backdrop-filter: blur(24px) saturate(165%);
+    backdrop-filter: blur(24px) saturate(165%);
+    box-shadow: 0 12px 32px #18332626, 0 2px 8px #1736290c, inset 0 1px 1px #fff, inset 0 -1px 1px #ffffff8c, 0 0 0 .5px #304d2e20;
+  }
+  .liquid-lens {
+    position: absolute;
+    pointer-events: none;
+    left: 0;
+    top: 6px;
+    width: var(--lens-width, 80px);
+    height: var(--lens-height, 58px);
+    border-radius: 24px;
+    border: 1px solid #ffffffba;
+    background: radial-gradient(ellipse at var(--lens-light, 30%) 0%, #ffffffed, transparent 62%), linear-gradient(155deg, #ffffff7d, #d7e7cf80 60%, #ffffff73);
+    box-shadow: inset 0 1px 1px #fff, inset 0 -1px 1px #77977d4a, inset 1px 0 1px #ffffffb0, 0 3px 9px #27472f16;
+    transform: translate3d(var(--lens-x, 6px), var(--lens-y, 0px), 0) scale(var(--lens-stretch, 1), var(--lens-lift, 1));
+    transform-origin: center;
+    transition: transform .46s cubic-bezier(.2, 1.35, .35, 1), width .25s ease, box-shadow .2s ease;
+    will-change: transform;
+  }
+  .liquid-lens:after {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    border-top: 1px solid #ffffffc9;
+    border-bottom: 1px solid #ffffff7a;
+  }
+  .liquid-dock.is-dragging .liquid-lens {
+    transition: transform 55ms linear, box-shadow .15s ease;
+    background: radial-gradient(ellipse at var(--lens-light, 30%) 0%, #fff, transparent 66%), linear-gradient(145deg, #ffffffba, #ecf3e678 65%, #ffffffdb);
+    box-shadow: inset 0 1px 2px #fff, inset 0 -1px 2px #6688706b, inset 1px 0 2px #fff, 0 9px 20px #193c3238, 0 1px 3px #35554726;
+  }
+  .mobile-match-nav.liquid-dock>button { position: relative; z-index: 1; touch-action: none; transition: color .15s ease; }
+  .mobile-match-nav.liquid-dock>button.is-active { background: transparent; box-shadow: none; color: #174b35; }
+  .mobile-match-nav.liquid-dock>button:hover { background: transparent; }
+  .liquid-dock>button svg { transition: transform .2s cubic-bezier(.2, 1.4, .4, 1); }
+  .liquid-dock.is-dragging>button.is-active svg { transform: translateY(-2px) scale(1.17); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liquid-lens { transition: none !important; transform: translate(var(--lens-x, 6px), 0); }
+  .liquid-dock>button svg { transition: none; transform: none !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .mobile-match-nav.liquid-dock { background: #f5f8f2; backdrop-filter: none; }
+  .liquid-lens { background: #e2edda; }
+}

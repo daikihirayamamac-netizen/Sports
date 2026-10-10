@@ -23,7 +23,7 @@ export function initialBoard(): Board {
   const common = { venue: '見前南中学校グラウンド', competition: 'リーグ戦（未消化分）', halfMinutes: 45,
     phase: 'scheduled' as Phase, elapsedMs: 0, runningSince: null };
   return { version: 0, updatedAt: 0, commandIds: [], matches: [
-    { ...common, id: 'match-1300', home: '自分たちのチーム', away: 'MIRUMAE 4th', kickoff: '2026-10-10T13:00:00+09:00', events: [] },
+    { ...common, id: 'match-1300', home: '上田中学校', away: 'MIRUMAE 南', kickoff: '2026-10-10T13:00:00+09:00', events: [] },
     { ...common, id: 'match-1420', home: '見前南中', away: 'MIRUMAE', kickoff: '2026-10-10T14:20:00+09:00', events: [] }
   ] };
 }
