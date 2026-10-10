@@ -27,13 +27,18 @@ async function main(){
   try{
     await startServer();
     browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
-    const operator=await browser.newContext({viewport:{width:1440,height:1080},locale:'ja-JP'});
+    const operator=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,locale:'ja-JP'});
     const spectator=await browser.newContext({viewport:{width:1440,height:1080},locale:'ja-JP'});
     const page=await operator.newPage();const viewer=await spectator.newPage();
     const errors:string[]=[];
     for(const p of [page,viewer])p.on('pageerror',e=>errors.push(e.message));
     await viewer.goto(base);await viewer.getByText('自動更新中 · 3秒ごと').waitFor();
     await viewer.screenshot({path:path.join(evidence,'desktop.png'),fullPage:true});
+    const mobile=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1,locale:'ja-JP'});
+    const phone=await mobile.newPage();phone.on('pageerror',e=>errors.push(e.message));
+    await phone.goto(base);await phone.getByText('自動更新中 · 3秒ごと').waitFor();
+    await phone.evaluate(()=>document.fonts.ready);
+    await phone.screenshot({path:path.join(evidence,'mobile-first-screen.png'),animations:'disabled'});
     assert.equal(await viewer.getByRole('button',{name:'試合開始',exact:true}).count(),0);
     const unauthorized=await spectator.request.post(`${base}/api/board`,{headers:{origin:base},data:{id:randomUUID(),matchId:'match-1300',version:0,action:{type:'start'}}});
     assert.equal(unauthorized.status(),401);pass('spectators can read but cannot change the match');
@@ -90,13 +95,33 @@ async function main(){
     state=(await board()).board.matches[0];assert.equal(state.phase,'second');assert.equal(state.elapsedMs,1_800_000);
     pass('clock correction, halftime and the configured second-half start work');
     await page.screenshot({path:path.join(evidence,'admin.png'),fullPage:true});
-    const mobile=await browser.newContext({viewport:{width:390,height:844},isMobile:true,deviceScaleFactor:1,locale:'ja-JP'});
-    const phone=await mobile.newPage();phone.on('pageerror',e=>errors.push(e.message));await phone.goto(base);await phone.getByText('自動更新中 · 3秒ごと').waitFor();
+    await page.getByRole('button',{name:'ライブ操作へ移動',exact:true}).click();
+    await page.waitForFunction(()=>{const controls=document.querySelector('.control-panel')?.getBoundingClientRect();return !!controls&&controls.top>0&&controls.top<110;});
+    await page.screenshot({path:path.join(evidence,'mobile-operator.png'),animations:'disabled'});
+    pass('operator dock reaches controls on a phone without covering the action buttons');
+    await phone.goto(base);await phone.getByText('自動更新中 · 3秒ごと').waitFor();
     assert.ok(await phone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     await phone.screenshot({path:path.join(evidence,'mobile.png'),fullPage:true});
     await phone.setViewportSize({width:320,height:720});assert.ok(await phone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
     pass('mobile layouts fit both 390px and 320px without horizontal overflow');
-    await phone.getByRole('button',{name:'QRコードを表示',exact:true}).click();await phone.getByAltText('観戦用URLのQRコード').waitFor();
+    const dock=phone.getByRole('navigation',{name:'スマホ用ナビゲーション'});
+    assert.equal(await dock.isVisible(),true);
+    for(const button of await dock.getByRole('button').all()){
+      const box=await button.boundingBox();assert.ok(box&&box.width>=44&&box.height>=44);
+    }
+    await phone.getByRole('button',{name:'写真を見る',exact:true}).click();
+    assert.equal(await phone.getByRole('tab',{name:/写真/}).getAttribute('aria-selected'),'true');
+    await phone.locator('.photo-grid img').waitFor();
+    await phone.getByRole('button',{name:'試合情報を見る',exact:true}).click();
+    assert.equal(await phone.locator('.schedule-card').isVisible(),true);
+    await phone.getByRole('button',{name:'速報を見る',exact:true}).click();
+    assert.equal(await phone.locator('.schedule-card').isVisible(),false);
+    pass('mobile glass navigation switches views with accessible 44px touch targets');
+    await phone.getByRole('button',{name:'観戦リンクを共有',exact:true}).click();await phone.getByAltText('観戦用URLのQRコード').waitFor();
+    const sheet=await phone.locator('dialog').boundingBox();
+    assert.ok(sheet&&Math.abs(sheet.y+sheet.height-720)<=2);
+    await phone.screenshot({path:path.join(evidence,'mobile-share-sheet.png'),animations:'disabled'});
+    pass('sharing opens as a bottom sheet within the mobile viewport');
     const url=await phone.getByRole('textbox',{name:'観戦用URL'}).inputValue();assert.equal(url,`${base}/?match=match-1300`);assert.ok(!url.includes('admin'));
     pass('QR sharing points only to the public spectator page');
     await phone.getByRole('button',{name:'閉じる',exact:true}).click();

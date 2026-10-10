@@ -2,10 +2,11 @@
 
 import { useCallback,useEffect,useRef,useState,type FormEvent } from 'react';
 import Link from 'next/link';
-import { Activity,ArrowDownToLine,ArrowLeft,ArrowRight,Camera,Check,ChevronRight,Clock3,Flag,
+import { Activity,ArrowLeft,ArrowRight,Camera,Check,ChevronRight,Clock3,Flag,
   ImagePlus,Info,LoaderCircle,LockKeyhole,LogOut,MapPin,Maximize2,MessageSquare,Pause,Play,
   Plus,Radio,RotateCcw,Settings2,Share2,ShieldCheck,Signal,WifiOff,X,ZoomIn } from 'lucide-react';
 import { clockText,elapsed,initialBoard,phaseLabels,totals,type Action,type Match,type MatchEvent,type PublicBoard,type Side } from '@/lib/match';
+import { MobileMatchNav } from './mobile-match-nav';
 
 type Modal='share'|'settings'|'clock'|'photo'|'card'|'note'|'help'|null;
 type ApiBoard={board:PublicBoard;serverNow:number;demo?:boolean};
@@ -29,6 +30,7 @@ export function MatchBoard({admin}:{admin:boolean}){
   const [authenticated,setAuthenticated]=useState(false);
   const [authReady,setAuthReady]=useState(!admin);
   const [tab,setTab]=useState('live');
+  const [mobileSection,setMobileSection]=useState(admin?'controls':'live');
   const [modal,setModal]=useState<Modal>(null);
   const [qr,setQr]=useState('');
   const [side,setSide]=useState<Side>('home');
@@ -36,6 +38,8 @@ export function MatchBoard({admin}:{admin:boolean}){
   const [confirm,setConfirm]=useState<{title:string;text:string;action:Action}|null>(null);
   const mutation=useRef(false);
   const scoreRef=useRef<HTMLDivElement>(null);
+  const feedRef=useRef<HTMLElement>(null);
+  const controlsRef=useRef<HTMLElement>(null);
   const match=board.matches.find(m=>m.id===selected)||board.matches[0];
   const canEdit=admin&&authenticated;
   const elapsedMs=elapsed(match,now);
@@ -88,7 +92,16 @@ export function MatchBoard({admin}:{admin:boolean}){
     if(modal!=='share')return;
     void import('qrcode').then(({default:QRCode})=>QRCode.toDataURL(`${location.origin}/?match=${selected}`,{width:280,margin:2,color:{dark:'#11251c',light:'#ffffff'}})).then(setQr).catch(()=>setError('QRコードを生成できませんでした。リンクをコピーしてください。'));
   },[modal,selected]);
-  const switchMatch=(id:string)=>{setSelected(id);setTab('live');const url=new URL(location.href);url.searchParams.set('match',id);history.replaceState(null,'',url);};
+  const selectTab=(value:string)=>{setTab(value);setMobileSection(value);};
+  const switchMatch=(id:string)=>{setSelected(id);selectTab('live');const url=new URL(location.href);url.searchParams.set('match',id);history.replaceState(null,'',url);};
+  const navigateMobile=(section:string)=>{
+    setMobileSection(section);
+    if(section!=='controls')setTab(section);
+    requestAnimationFrame(()=>{
+      const target=section==='controls'?controlsRef.current:feedRef.current;
+      target?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});
+    });
+  };
   const send=async(action:Action)=>{
     if(mutation.current)return;mutation.current=true;setBusy(true);setError('');
     const command={id:crypto.randomUUID(),matchId:selected,version:board.version,action};
@@ -136,7 +149,7 @@ export function MatchBoard({admin}:{admin:boolean}){
         <section className="scoreboard" ref={scoreRef} aria-label="スコアボード">
           <div className="pitch-decoration" aria-hidden="true"><div/><span/></div>
           <div className="score-top"><span className="league-label">{match.competition}</span><span className={`live-badge ${playing?'is-live':''}`}><i/>{!online?'OFFLINE':playing?'LIVE':match.phase==='finished'?'FULL TIME':'MATCHDAY'}</span></div>
-          <div className="match-status"><span>{phaseLabels[match.phase]}</span><b>{match.phase==='scheduled'?`${kickoffTime(match.kickoff)} キックオフ予定`:clockText(elapsedMs)}</b>{playing&&match.runningSince===null&&<small>時計停止中</small>}</div>
+          <div className={`match-status ${match.phase==='scheduled'?'before-kickoff':''}`}><span>{phaseLabels[match.phase]}</span><b>{match.phase==='scheduled'?kickoffTime(match.kickoff):clockText(elapsedMs)}{match.phase==='scheduled'&&<small className="kickoff-suffix">KICK OFF</small>}</b>{playing&&match.runningSince===null&&<small>時計停止中</small>}</div>
           <div className="score-row">
             <Team side="home" name={match.home}/>
             <div className="score" aria-label={`${match.home} ${totals(match,'home')} 対 ${totals(match,'away')} ${match.away}`}><span key={`h${totals(match,'home')}`}>{totals(match,'home')}</span><i>:</i><span key={`a${totals(match,'away')}`}>{totals(match,'away')}</span></div>
@@ -146,7 +159,7 @@ export function MatchBoard({admin}:{admin:boolean}){
           <div className="score-bottom"><span><span className={`connection-dot ${!online?'offline':''}`}/>{ready?(online?'自動更新中 · 3秒ごと':'接続待ち · 時計は参考表示'):'接続中'}</span><button onClick={()=>{if(document.fullscreenElement)void document.exitFullscreen();else void scoreRef.current?.requestFullscreen().catch(()=>setToast('この端末は全画面表示に対応していません。'));}} aria-label="スコアを全画面表示"><Maximize2 size={15}/><span>全画面</span></button></div>
         </section>
 
-        {canEdit&&<section className="control-panel">
+        {canEdit&&<section className="control-panel" ref={controlsRef} id="match-controls">
           <div className="panel-heading"><h2><Radio size={17}/>ライブ操作</h2><span className="operator-badge"><ShieldCheck size={13}/>あなた専用</span></div>
           <div className="clock-controls">
             {match.phase==='scheduled'&&<button className="button primary wide" disabled={busy||!ready||!online} onClick={()=>void send({type:'start'})}><Play size={18} fill="currentColor"/>試合開始</button>}
@@ -162,7 +175,7 @@ export function MatchBoard({admin}:{admin:boolean}){
           {latest&&<button className="undo-button" disabled={busy||!online} onClick={()=>setConfirm({title:'直前の記録を取り消しますか？',text:`${latest.minute} ${eventLabels[latest.kind]}${latest.side?` · ${match[latest.side]}`:''}`,action:{type:'undo',eventId:latest.id}})}><RotateCcw size={13}/>直前の記録を取り消す</button>}
         </section>}
 
-        <section className="feed-panel"><div className="tabs" role="tablist" aria-label="試合の情報"><button role="tab" id="tab-live" aria-controls="panel-live" aria-selected={tab==='live'} onClick={()=>setTab('live')} className={tab==='live'?'active':''}><Activity size={16}/>速報<span>{match.events.filter(e=>!e.cancelledAt).length}</span></button><button role="tab" id="tab-photos" aria-controls="panel-photos" aria-selected={tab==='photos'} onClick={()=>setTab('photos')} className={tab==='photos'?'active':''}><Camera size={16}/>写真<span>{photos.length}</span></button><button role="tab" id="tab-info" aria-controls="panel-info" aria-selected={tab==='info'} onClick={()=>setTab('info')} className={tab==='info'?'active':''}><Info size={16}/>試合情報</button></div>
+        <section className="feed-panel" ref={feedRef} id="match-feed"><div className="tabs" role="tablist" aria-label="試合の情報"><button role="tab" id="tab-live" aria-controls="panel-live" aria-selected={tab==='live'} onClick={()=>selectTab('live')} className={tab==='live'?'active':''}><Activity size={16}/>速報<span>{match.events.filter(e=>!e.cancelledAt).length}</span></button><button role="tab" id="tab-photos" aria-controls="panel-photos" aria-selected={tab==='photos'} onClick={()=>selectTab('photos')} className={tab==='photos'?'active':''}><Camera size={16}/>写真<span>{photos.length}</span></button><button role="tab" id="tab-info" aria-controls="panel-info" aria-selected={tab==='info'} onClick={()=>selectTab('info')} className={tab==='info'?'active':''}><Info size={16}/>試合情報</button></div>
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab==='live'&&<><div className="feed-heading"><span>試合の流れ</span><small>新しい記録が上に表示されます</small></div>{match.events.length?<ol className="timeline">{[...match.events].reverse().map(event=><li key={event.id} className={`${event.kind} ${event.cancelledAt?'cancelled':''}`}><div className="timeline-minute">{event.minute}</div><div className="timeline-dot"><EventIcon kind={event.kind}/></div><div className="event-content"><div className="event-title"><strong>{event.cancelledAt?'取り消し済み':eventLabels[event.kind]}</strong>{event.side&&!event.cancelledAt&&<span>{match[event.side]}</span>}{canEdit&&!event.cancelledAt&&event.kind!=='period'&&<button aria-label={`${event.minute}の${eventLabels[event.kind]}を取り消す`} disabled={busy||!online} onClick={()=>setConfirm({title:'この記録を取り消しますか？',text:`${event.minute} ${eventLabels[event.kind]}`,action:{type:'undo',eventId:event.id}})}><RotateCcw size={13}/></button>}</div>{event.player&&<p>選手：{event.player}</p>}{event.text&&<p>{event.text}</p>}{event.photoUrl&&<button className="timeline-photo" onClick={()=>setLightbox(event)}><img src={event.photoUrl} alt={event.text||'試合の写真'} loading="lazy"/><span><ZoomIn size={16}/></span></button>}</div></li>)}</ol>:<EmptyState icon="flag" title="キックオフの、その時まで。" text="試合が始まると、ゴールやカードの記録がここに届きます。"/>}</>}
           {tab==='photos'&&(photos.length?<div className="photo-grid">{photos.map(photo=><button key={photo.id} onClick={()=>setLightbox(photo)}><img src={photo.photoUrl} alt={photo.text||'試合の写真'} loading="lazy"/><span>{photo.minute} {photo.text}</span></button>)}</div>:<EmptyState icon="camera" title="今日の一枚を、ここに。" text="現地で撮影した写真が追加されると、みんなで見ることができます。"/>)}
@@ -170,7 +183,7 @@ export function MatchBoard({admin}:{admin:boolean}){
           </div></section>
       </div>
 
-      <aside className="side-column"><section className="share-card"><span className="eyebrow">ONE TEAM. EVERYWHERE.</span><div className="share-art" aria-hidden="true"><span className="orbit o1"/><span className="orbit o2"/><span className="share-ball"><BallIcon/></span><i className="spark one">＋</i><i className="spark two">＋</i></div><h2>応援は、<br/>どこからだって。</h2><p>友だちにリンクを送って、<br/>試合の瞬間を一緒に。</p><button className="button lime wide" onClick={()=>void share()}><Share2 size={17}/>この試合をシェア<ArrowRight size={17}/></button><button className="qr-link" onClick={()=>setModal('share')}>QRコードを表示</button></section>
+      <aside className="side-column" data-mobile-tab={tab}><section className="share-card"><span className="eyebrow">ONE TEAM. EVERYWHERE.</span><div className="share-art" aria-hidden="true"><span className="orbit o1"/><span className="orbit o2"/><span className="share-ball"><BallIcon/></span><i className="spark one">＋</i><i className="spark two">＋</i></div><h2>応援は、<br/>どこからだって。</h2><p>友だちにリンクを送って、<br/>試合の瞬間を一緒に。</p><button className="button lime wide" onClick={()=>void share()}><Share2 size={17}/>この試合をシェア<ArrowRight size={17}/></button><button className="qr-link" onClick={()=>setModal('share')}>QRコードを表示</button></section>
         <section className="stats-card"><div className="aside-heading"><h2>マッチスタッツ</h2><span>STATS</span></div><div className="stats-team-row"><b>{match.home}</b><b>{match.away}</b></div>{(['goal','yellow','red'] as const).map(kind=><div className="stats-row" key={kind}><strong>{totals(match,'home',kind)}</strong><span>{kind==='goal'?<BallIcon/>:<span className={`card-symbol ${kind}`}/>}<span>{kind==='goal'?'ゴール':kind==='yellow'?'イエロー':'レッド'}</span></span><strong>{totals(match,'away',kind)}</strong></div>)}</section>
         <section className="schedule-card"><div className="aside-heading"><h2>今日のスケジュール</h2><Clock3 size={16}/></div><ol><li><time>11:45</time><span>現地集合</span></li><li><time>12:00</time><span>ウォーミングアップ</span></li><li className="featured"><time>13:00</time><span>vs MIRUMAE 4th<i>リーグ戦</i></span></li><li><time>14:20</time><span>見前南中 vs MIRUMAE</span></li><li><time>15:40</time><span>vs MIRUMAE 4th<i>審判割当</i></span></li><li><time>17:00</time><span>ミーティング・解散<i>予定</i></span></li></ol></section>
         <div className="side-note"><Signal size={15}/><span>画面を開いたままで自動更新。<br/>{synced?`最終受信 ${new Date(synced).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'試合情報を確認しています。'}</span></div>
@@ -178,6 +191,7 @@ export function MatchBoard({admin}:{admin:boolean}){
       </>}
       <footer className="footer"><span className="footer-brand">TOUCHLINE<span>ピッチの熱を、どこにいても。</span></span><span>MADE FOR THE TEAM <span className="tiny-square"/></span></footer>
     </main>
+    {(!admin||authenticated)&&<MobileMatchNav admin={canEdit} active={mobileSection} onNavigate={navigateMobile} onShare={()=>setModal('share')}/>}
     {toast&&<div className="toast" role="status"><Check size={18}/>{toast}</div>}
     {busy&&<div className="saving" role="status"><LoaderCircle size={15} className="spin"/>保存中…</div>}
     {modal&&<Dialog title={{share:'みんなで、この試合を。',settings:'試合の設定',clock:'試合時計を補正',photo:'ピッチの一枚を追加',card:'カードを記録',note:'現地からひとこと',help:'TOUCHLINE の使い方'}[modal]} onClose={()=>{if(!busy)setModal(null);}}>
